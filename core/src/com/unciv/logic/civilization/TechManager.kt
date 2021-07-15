@@ -1,10 +1,13 @@
 package com.unciv.logic.civilization
 
+import com.unciv.logic.city.CityInfo
 import com.unciv.logic.map.MapSize
 import com.unciv.logic.map.RoadStatus
+import com.unciv.logic.map.TileInfo
 import com.unciv.models.ruleset.Unique
 import com.unciv.models.ruleset.UniqueTriggerActivation
 import com.unciv.models.ruleset.tech.Technology
+import com.unciv.models.ruleset.unit.BaseUnit
 import com.unciv.ui.utils.withItem
 import java.util.*
 import kotlin.collections.ArrayList
@@ -22,7 +25,7 @@ class TechManager {
     @Transient
     private var researchedTechUniques = ArrayList<Unique>()
 
-    // MapUnit.canPassThrough is the most called function in the game, and having these extremey specific booleans is or way of improving the time cost
+    // MapUnit.canPassThrough is the most called function in the game, and having these extremely specific booleans is or way of improving the time cost
     @Transient
     var wayfinding = false
     @Transient
@@ -46,8 +49,9 @@ class TechManager {
 
     /** When moving towards a certain tech, the user doesn't have to manually pick every one. */
     var techsToResearch = ArrayList<String>()
-    private var techsInProgress = HashMap<String, Int>()
     var overflowScience = 0
+    private var techsInProgress = HashMap<String, Int>()
+    fun scienceSpentOnTech(tech: String): Int = if (tech in techsInProgress) techsInProgress[tech]!! else 0
 
     /** In civ IV, you can auto-convert a certain percentage of gold in cities to science */
     var goldPercentConvertedToScience = 0.6f
@@ -82,11 +86,13 @@ class TechManager {
         // https://forums.civfanatics.com/threads/the-mechanics-of-overflow-inflation.517970/
         techCost /= 1 + techsResearchedKnownCivs / undefeatedCivs.toFloat() * 0.3f
         // http://www.civclub.net/bbs/forum.php?mod=viewthread&tid=123976
-        val worldSizeModifier = when (civInfo.gameInfo.tileMap.mapParameters.size) {
-            MapSize.Medium -> floatArrayOf(1.1f, 0.05f)
-            MapSize.Large -> floatArrayOf(1.2f, 0.03f)
-            MapSize.Huge -> floatArrayOf(1.3f, 0.02f)
-            else -> floatArrayOf(1f, 0.05f)
+        val worldSizeModifier = with (civInfo.gameInfo.tileMap.mapParameters.mapSize) {
+            when {
+                radius >= MapSize.Huge.radius -> floatArrayOf(1.3f, 0.02f)
+                radius >= MapSize.Large.radius -> floatArrayOf(1.2f, 0.03f)
+                radius >= MapSize.Medium.radius -> floatArrayOf(1.1f, 0.05f)
+                else -> floatArrayOf(1f, 0.05f)
+            }
         }
         techCost *= worldSizeModifier[0]
         techCost *= 1 + (civInfo.cities.size - 1) * worldSizeModifier[1]
@@ -176,8 +182,9 @@ class TechManager {
     private fun scienceFromResearchAgreements(): Int {
         // https://forums.civfanatics.com/resources/research-agreements-bnw.25568/
         var researchAgreementModifier = 0.5f
-        for (unique in civInfo.getMatchingUniques("Science gained from research agreements +50%"))
-            researchAgreementModifier += 0.25f
+        for (unique in civInfo.getMatchingUniques("Science gained from research agreements []%")) {
+            researchAgreementModifier += unique.params[0].toFloat() / 200f
+        }
         return (scienceFromResearchAgreements / 3 * researchAgreementModifier).toInt()
     }
 
@@ -239,7 +246,7 @@ class TechManager {
         }
         updateTransientBooleans()
 
-        civInfo.addNotification("Research of [$techName] has completed!", TechAction(techName), NotificationIcon.Science, techName )
+        civInfo.addNotification("Research of [$techName] has completed!", TechAction(techName), NotificationIcon.Science, techName)
         civInfo.popupAlerts.add(PopupAlert(AlertType.TechResearched, techName))
 
         val currentEra = civInfo.getEra()
@@ -250,44 +257,100 @@ class TechManager {
                     knownCiv.addNotification("[${civInfo.civName}] has entered the [$currentEra]!", civInfo.civName, NotificationIcon.Science)
                 }
             }
-            for (it in getRuleset().policyBranches.values.filter { it.era == currentEra }) {
+            for (it in getRuleset().policyBranches.values.filter { it.era == currentEra && civInfo.policies.isAdoptable(it) }) {
                 civInfo.addNotification("[" + it.name + "] policy branch unlocked!", NotificationIcon.Culture)
             }
         }
 
-        for (revealedResource in getRuleset().tileResources.values.filter { techName == it.revealedBy }) {
-            val resourcesCloseToCities = civInfo.cities.asSequence()
-                    .flatMap { it.getCenterTile().getTilesInDistance(3) + it.getTiles() }
-                    .filter { it.resource == revealedResource.name && (it.getOwner() == civInfo || it.getOwner() == null) }
-                    .distinct()
-
-            for (tileInfo in resourcesCloseToCities) {
-                val closestCityTile = tileInfo.getTilesInDistance(4)
-                        .firstOrNull { it.isCityCenter() }
-                if (closestCityTile != null) {
-                    val text = "[${revealedResource.name}] revealed near [${closestCityTile.getCity()!!.name}]"
-                    civInfo.addNotification(text, tileInfo.position, "ResourceIcons/"+revealedResource.name)
-                    break
-                }
-            }
-        }
+        if (civInfo.playerType == PlayerType.Human) notifyRevealedResources(techName)
 
         val obsoleteUnits = getRuleset().units.values.filter { it.obsoleteTech == techName }.map { it.name }
+        val unitUpgrades = HashMap<String, ArrayList<CityInfo>>()
         for (city in civInfo.cities) {
             // Do not use replaceAll - that's a Java 8 feature and will fail on older phones!
             val oldQueue = city.cityConstructions.constructionQueue.toList()  // copy, since we're changing the queue
             city.cityConstructions.constructionQueue.clear()
             for (constructionName in oldQueue) {
                 if (constructionName in obsoleteUnits) {
-                    val text = "[$constructionName] has been obsolete and will be removed from construction queue in [${city.name}]!"
-                    civInfo.addNotification(text, city.location, NotificationIcon.Construction)
+                    if (constructionName !in unitUpgrades.keys) {
+                        unitUpgrades[constructionName] = ArrayList<CityInfo>()
+                    }
+                    unitUpgrades[constructionName]?.add(city)
+                    val construction = city.cityConstructions.getConstruction(constructionName)
+                    if (construction is BaseUnit && construction.upgradesTo != null) {
+                        city.cityConstructions.constructionQueue.add(construction.upgradesTo!!)
+                    }
                 } else city.cityConstructions.constructionQueue.add(constructionName)
+            }
+        }
+
+        // Add notifications for obsolete units/constructions
+        for ((unit, cities) in unitUpgrades) {
+            val construction = cities[0].cityConstructions.getConstruction(unit)
+            if (cities.size == 1) {
+                val city = cities[0]
+                if (construction is BaseUnit && construction.upgradesTo != null) {
+                    val text = "[${city.name}] changed production from [$unit] to [${construction.upgradesTo!!}]"
+                    civInfo.addNotification(text, city.location, unit, NotificationIcon.Construction, construction.upgradesTo!!)
+                } else {
+                    val text = "[$unit] has become obsolete and was removed from the queue in [${city.name}]!"
+                    civInfo.addNotification(text, city.location, NotificationIcon.Construction)
+                }
+            } else {
+                val locationAction = LocationAction(cities.map { it.location })
+                if (construction is BaseUnit && construction.upgradesTo != null) {
+                    val text = "[${cities.size}] cities changed production from [$unit] to [${construction.upgradesTo!!}]"
+                    civInfo.addNotification(text, locationAction, unit, NotificationIcon.Construction, construction.upgradesTo!!)
+                } else {
+                    val text = "[$unit] has become osbolete and was removed from the queue in [${cities.size}] cities!"
+                    civInfo.addNotification(text, locationAction, NotificationIcon.Construction)
+                }
             }
         }
 
         for (unique in civInfo.getMatchingUniques("Receive free [] when you discover []")) {
             if (unique.params[1] != techName) continue
             civInfo.addUnit(unique.params[0])
+        }
+    }
+
+    private fun notifyRevealedResources(techName: String) {
+        data class CityTileAndDistance(val city: CityInfo, val tile: TileInfo, val distance: Int)
+
+        for (revealedResource in getRuleset().tileResources.values.filter { techName == it.revealedBy }) {
+            val revealedName = revealedResource.name
+
+            val visibleRevealTiles = civInfo.viewableTiles.asSequence()
+                .filter { it.resource == revealedName }
+                .flatMap { tile -> civInfo.cities.asSequence()
+                    .map {
+                        // build a full cross join all revealed tiles * civ's cities (should rarely surpass a few hundred)
+                        // cache distance for each pair as sort will call it ~ 2n log n times
+                        // should still be cheaper than looking up 'the' closest city per reveal tile before sorting
+                        city -> CityTileAndDistance(city, tile, tile.aerialDistanceTo(city.getCenterTile()))
+                    }
+                }
+                .filter { it.distance <= 5 && (it.tile.getOwner() == null || it.tile.getOwner() == civInfo) }
+                .sortedWith ( compareBy { it.distance } )
+                .distinctBy { it.tile }
+
+            val chosenCity = visibleRevealTiles.firstOrNull()?.city ?: continue
+            val positions = visibleRevealTiles
+                // re-sort to a more pleasant display order
+                .sortedWith(compareBy{ it.tile.aerialDistanceTo(chosenCity.getCenterTile()) })
+                .map { it.tile.position }
+                .toList()       // explicit materialization of sequence to satisfy addNotification overload
+
+            val text =  if(positions.size==1)
+                "[$revealedName] revealed near [${chosenCity.name}]"
+            else
+                "[${positions.size}] sources of [$revealedName] revealed, e.g. near [${chosenCity.name}]"
+
+            civInfo.addNotification(
+                text,
+                LocationAction(positions),
+                "ResourceIcons/$revealedName"
+            )
         }
     }
 

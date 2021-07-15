@@ -13,11 +13,10 @@ import com.unciv.logic.automation.UnitAutomation
 import com.unciv.logic.battle.*
 import com.unciv.logic.map.TileInfo
 import com.unciv.models.AttackableTile
-import com.unciv.models.translations.tr
 import com.unciv.models.ruleset.unit.UnitType
+import com.unciv.models.translations.tr
 import com.unciv.ui.utils.*
 import com.unciv.ui.worldscreen.WorldScreen
-import com.unciv.ui.utils.Popup
 import kotlin.math.max
 
 class BattleTable(val worldScreen: WorldScreen): Table() {
@@ -40,21 +39,18 @@ class BattleTable(val worldScreen: WorldScreen): Table() {
 
     fun update() {
         isVisible = true
+        if (!worldScreen.canChangeState) { hide(); return }
 
         val attacker = tryGetAttacker()
-        if(attacker==null || !worldScreen.canChangeState){ hide(); return }
+        if (attacker == null) { hide(); return }
 
-        if (attacker.getUnitType()==UnitType.Missile) {
+        if (attacker is MapUnitCombatant && attacker.unit.baseUnit.isNuclearWeapon()) {
             val selectedTile = worldScreen.mapHolder.selectedTile
             if (selectedTile == null) { hide(); return } // no selected tile
-            simulateNuke(attacker as MapUnitCombatant, selectedTile)
-        }
-        else {
+            simulateNuke(attacker, selectedTile)
+        } else {
             val defender = tryGetDefender()
-            if (defender == null) {
-                hide(); return
-            }
-
+            if (defender == null) { hide(); return }
             simulateBattle(attacker, defender)
         }
     }
@@ -120,7 +116,7 @@ class BattleTable(val worldScreen: WorldScreen): Table() {
         add(defender.getDefendingStrength().toString()+Fonts.strength).row()
 
         val attackerModifiers =
-                BattleDamage.getAttackModifiers(attacker,null,defender).map {
+                BattleDamage.getAttackModifiers(attacker, defender).map {
                     val description = if(it.key.startsWith("vs ")) ("vs ["+it.key.replace("vs ","")+"]").tr() else it.key.tr()
                     val percentage = (if(it.value>0)"+" else "")+ it.value +"%"
                     "$description: $percentage"
@@ -208,7 +204,7 @@ class BattleTable(val worldScreen: WorldScreen): Table() {
         }
 
         else {
-            attackButton.onClick {
+            attackButton.onClick(attacker.getAttackSound()) {
                 Battle.moveAndAttack(attacker, attackableTile)
                 worldScreen.mapHolder.removeUnitActionOverlay() // the overlay was one of attacking
                 worldScreen.shouldUpdate = true
@@ -232,7 +228,10 @@ class BattleTable(val worldScreen: WorldScreen): Table() {
         add(attackerNameWrapper)
         var canNuke = true
         val defenderNameWrapper = Table()
-        for (tile in targetTile.getTilesInDistance(Battle.NUKE_RADIUS)) {
+        val blastRadius =
+            if (!attacker.unit.hasUnique("Blast radius []")) 2
+            else attacker.unit.getMatchingUniques("Blast radius []").first().params[0].toInt()
+        for (tile in targetTile.getTilesInDistance(blastRadius)) {
 
             //To make sure we dont nuke civilisations we cant declare war with
             val attackerCiv = attacker.getCivInfo()
@@ -279,8 +278,8 @@ class BattleTable(val worldScreen: WorldScreen): Table() {
             attackButton.label.color = Color.GRAY
         }
         else {
-            attackButton.onClick {
-                Battle.nuke(attacker, targetTile)
+            attackButton.onClick(attacker.getAttackSound()) {
+                Battle.NUKE(attacker, targetTile)
                 worldScreen.mapHolder.removeUnitActionOverlay() // the overlay was one of attacking
                 worldScreen.shouldUpdate = true
             }

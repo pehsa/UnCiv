@@ -1,6 +1,5 @@
 package com.unciv.ui.tilegroups
 
-import com.badlogic.gdx.graphics.g2d.Batch
 import com.unciv.UncivGame
 import com.unciv.logic.city.CityInfo
 import com.unciv.logic.civilization.CivilizationInfo
@@ -15,7 +14,7 @@ class WorldTileGroup(internal val worldScreen: WorldScreen, tileInfo: TileInfo, 
     private var cityButton: CityButton? = null
 
     fun selectUnit(unit: MapUnit) {
-        if(unit.type.isAirUnit()) return // doesn't appear on map so nothing to select
+        if(unit.type.isAirUnit() || unit.type.isMissile()) return // doesn't appear on map so nothing to select
         val unitImage = if (unit.type.isCivilian()) icons.civilianUnitIcon
         else icons.militaryUnitIcon
         unitImage?.selectUnit()

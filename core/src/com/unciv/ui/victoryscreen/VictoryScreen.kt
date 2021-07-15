@@ -4,13 +4,12 @@ import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.scenes.scene2d.ui.Table
 import com.badlogic.gdx.scenes.scene2d.ui.TextButton
 import com.badlogic.gdx.utils.Align
-import com.unciv.UncivGame
 import com.unciv.logic.civilization.CivilizationInfo
 import com.unciv.models.ruleset.VictoryType
 import com.unciv.models.translations.tr
-import com.unciv.ui.overviewscreen.EmpireOverviewScreen
 import com.unciv.ui.newgamescreen.GameSetupInfo
 import com.unciv.ui.newgamescreen.NewGameScreen
+import com.unciv.ui.overviewscreen.EmpireOverviewScreen
 import com.unciv.ui.pickerscreens.PickerScreen
 import com.unciv.ui.utils.*
 import com.unciv.ui.worldscreen.WorldScreen
@@ -57,7 +56,7 @@ class VictoryScreen(val worldScreen: WorldScreen) : PickerScreen() {
             someoneHasWon = true
             when (playerVictoryType) {
                 VictoryType.Cultural -> wonOrLost("You have won a cultural victory!")
-                VictoryType.Domination -> wonOrLost("You have won a domination victory!") // todo change translation
+                VictoryType.Domination -> wonOrLost("You have won a domination victory!")
                 VictoryType.Scientific -> wonOrLost("You have won a scientific victory!")
                 VictoryType.Neutral -> wonOrLost("You have won!")
             }
@@ -101,7 +100,9 @@ class VictoryScreen(val worldScreen: WorldScreen) : PickerScreen() {
         rightSideButton.isVisible = true
         rightSideButton.enable()
         rightSideButton.onClick {
-            game.setScreen(NewGameScreen(this, GameSetupInfo(gameInfo)))
+            val newGameSetupInfo = GameSetupInfo(gameInfo)
+            newGameSetupInfo.mapParameters.reseed()
+            game.setScreen(NewGameScreen(this, newGameSetupInfo))
         }
 
         closeButton.setText("One more turn...!".tr())
@@ -124,7 +125,7 @@ class VictoryScreen(val worldScreen: WorldScreen) : PickerScreen() {
         if (dominationVictoryEnabled) myVictoryStatusTable.add(conquestVictoryColumn())
         myVictoryStatusTable.row()
         if (scientificVictoryEnabled) myVictoryStatusTable.add("Complete all the spaceship parts\n to win!".toLabel())
-        if (culturalVictoryEnabled) myVictoryStatusTable.add("Complete 5 policy branches\n to win!".toLabel())
+        if (culturalVictoryEnabled) myVictoryStatusTable.add("Complete 5 policy branches and build\n the Utopia Project to win!".toLabel())
         if (dominationVictoryEnabled) myVictoryStatusTable.add("Destroy all enemies\n to win!".toLabel())
 
         contentsTable.clear()

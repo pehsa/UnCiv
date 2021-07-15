@@ -3,10 +3,8 @@ package com.unciv.logic.trade
 import com.unciv.Constants
 import com.unciv.logic.civilization.CivilizationInfo
 import com.unciv.logic.civilization.diplomacy.DiplomacyFlags
-import com.unciv.logic.civilization.diplomacy.DiplomaticStatus
 import com.unciv.models.ruleset.ModOptionsConstants
 import com.unciv.models.ruleset.tile.ResourceType
-import com.unciv.models.translations.tr
 
 class TradeLogic(val ourCivilization:CivilizationInfo, val otherCivilization: CivilizationInfo) {
 
@@ -81,8 +79,8 @@ class TradeLogic(val ourCivilization:CivilizationInfo, val otherCivilization: Ci
         fun transferTrade(to: CivilizationInfo, from: CivilizationInfo, trade: Trade) {
             for (offer in trade.theirOffers) {
                 if (offer.type == TradeType.Gold) {
-                    to.gold += offer.amount
-                    from.gold -= offer.amount
+                    to.addGold(offer.amount)
+                    from.addGold(-offer.amount)
                 }
                 if (offer.type == TradeType.Technology) {
                     to.tech.addTechnology(offer.name)
@@ -90,19 +88,26 @@ class TradeLogic(val ourCivilization:CivilizationInfo, val otherCivilization: Ci
                 if (offer.type == TradeType.City) {
                     val city = from.cities.first { it.id == offer.name }
                     city.moveToCiv(to)
-                    city.getCenterTile().getUnits().toList().forEach { it.movement.teleportToClosestMoveableTile() }
+                    city.getCenterTile().getUnits().forEach { it.movement.teleportToClosestMoveableTile() }
+                    city.getTiles().forEach{ tile ->
+                        tile.getUnits().forEach{ unit ->
+                            if (!unit.civInfo.canEnterTiles(to)) {
+                                unit.movement.teleportToClosestMoveableTile()
+                            }
+                        }
+                    }
                     to.updateViewableTiles()
                     from.updateViewableTiles()
                 }
                 if (offer.type == TradeType.Treaty) {
                     if (offer.name == Constants.peaceTreaty) to.getDiplomacyManager(from).makePeace()
                     if (offer.name == Constants.researchAgreement) {
-                        to.gold -= offer.amount
+                        to.addGold(-offer.amount)
                         to.getDiplomacyManager(from).setFlag(DiplomacyFlags.ResearchAgreement, offer.duration)
                     }
                 }
                 if (offer.type == TradeType.Introduction)
-                    to.meetCivilization(to.gameInfo.getCivilization(offer.name))
+                    to.makeCivilizationsMeet(to.gameInfo.getCivilization(offer.name))
 
                 if (offer.type == TradeType.WarDeclaration) {
                     val nameOfCivToDeclareWarOn = offer.name

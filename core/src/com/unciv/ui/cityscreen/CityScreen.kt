@@ -2,8 +2,6 @@ package com.unciv.ui.cityscreen
 
 import com.badlogic.gdx.Input
 import com.badlogic.gdx.graphics.Color
-import com.badlogic.gdx.scenes.scene2d.InputEvent
-import com.badlogic.gdx.scenes.scene2d.InputListener
 import com.badlogic.gdx.scenes.scene2d.ui.Table
 import com.badlogic.gdx.utils.Align
 import com.unciv.UncivGame
@@ -19,7 +17,6 @@ import com.unciv.ui.utils.AutoScrollPane as ScrollPane
 class CityScreen(internal val city: CityInfo): CameraStageBaseScreen() {
     var selectedTile: TileInfo? = null
     var selectedConstruction: IConstruction? = null
-    var keyListener: InputListener? = null
 
     /** Toggles or adds/removes all state changing buttons */
     val canChangeState = UncivGame.Current.worldScreen.canChangeState
@@ -30,7 +27,7 @@ class CityScreen(internal val city: CityInfo): CameraStageBaseScreen() {
     // Clockwise from the top-left
 
     /** Displays current production, production queue and available productions list - sits on LEFT */
-    private var constructionsTable = ConstructionsTable(this)
+    private var constructionsTable = CityConstructionsTable(this)
 
     /** Displays stats, buildings, specialists and stats drilldown - sits on TOP LEFT, can be toggled to */
     private var cityInfoTable = CityInfoTable(this)
@@ -75,8 +72,8 @@ class CityScreen(internal val city: CityInfo): CameraStageBaseScreen() {
         stage.addActor(cityInfoTable)
         update()
 
-        keyListener = getKeyboardListener()
-        stage.addListener(keyListener)
+        keyPressDispatcher[Input.Keys.LEFT] = { page(-1) }
+        keyPressDispatcher[Input.Keys.RIGHT] = { page(1) }
     }
 
     internal fun update() {
@@ -150,7 +147,7 @@ class CityScreen(internal val city: CityInfo): CameraStageBaseScreen() {
             val razeCityButton = "Raze city".toTextButton()
             razeCityButton.labelCell.pad(10f)
             razeCityButton.onClick { city.isBeingRazed = true; update() }
-            if (!canChangeState || city.isOriginalCapital)
+            if (!canChangeState || !city.canBeDestroyed())
                 razeCityButton.disable()
 
             razeCityButtonHolder.add(razeCityButton).colspan(cityPickerTable.columns)
@@ -238,7 +235,6 @@ class CityScreen(internal val city: CityInfo): CameraStageBaseScreen() {
     }
 
     fun exit() {
-        stage.removeListener(keyListener)
         game.setWorldScreen()
         game.worldScreen.mapHolder.setCenterPosition(city.location)
         game.worldScreen.bottomUnitTable.selectUnit()
@@ -250,23 +246,15 @@ class CityScreen(internal val city: CityInfo): CameraStageBaseScreen() {
         if (numCities == 0) return
         val indexOfCity = civInfo.cities.indexOf(city)
         val indexOfNextCity = (indexOfCity + delta + numCities) % numCities
-        // not entirely sure this is necessary, since we're changing screens we're changing stages as well?
-        stage.removeListener(keyListener)
         val newCityScreen = CityScreen(civInfo.cities[indexOfNextCity])
         newCityScreen.showConstructionsTable = showConstructionsTable // stay on stats drilldown between cities
         newCityScreen.update()
         game.setScreen(newCityScreen)
     }
 
-    private fun getKeyboardListener(): InputListener = object : InputListener() {
-        override fun keyDown(event: InputEvent?, keyCode: Int): Boolean {
-            if (event == null) return super.keyDown(event, keyCode)
-            when (event.keyCode) {
-                Input.Keys.LEFT -> page(-1)
-                Input.Keys.RIGHT -> page(1)
-                else -> return super.keyDown(event, keyCode)
-            }
-            return true
+    override fun resize(width: Int, height: Int) {
+        if (stage.viewport.screenWidth != width || stage.viewport.screenHeight != height) {
+            game.setScreen(CityScreen(city))
         }
     }
 }

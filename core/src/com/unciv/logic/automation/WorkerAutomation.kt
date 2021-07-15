@@ -1,6 +1,5 @@
 package com.unciv.logic.automation
 
-import com.badlogic.gdx.graphics.Color
 import com.unciv.Constants
 import com.unciv.UncivGame
 import com.unciv.logic.civilization.CivilizationInfo
@@ -16,11 +15,11 @@ class WorkerAutomation(val unit: MapUnit) {
         val enemyUnitsInWalkingDistance = unit.movement.getDistanceToTiles().keys
                 .filter { UnitAutomation.containsEnemyMilitaryUnit(unit, it) }
 
-        if (enemyUnitsInWalkingDistance.isNotEmpty()) return UnitAutomation.runAway(unit)
+        if (enemyUnitsInWalkingDistance.isNotEmpty() && !unit.type.isMilitary()) return UnitAutomation.runAway(unit)
 
         val currentTile = unit.getTile()
         val tileToWork = findTileToWork()
-
+        
         if (getPriority(tileToWork, unit.civInfo) < 3) { // building roads is more important
             if (tryConnectingCities(unit)) return
         }
@@ -64,7 +63,6 @@ class WorkerAutomation(val unit: MapUnit) {
         //Player can choose not to auto-build roads & railroads.
         if (unit.civInfo.isPlayerCivilization() && !UncivGame.Current.settings.autoBuildingRoads)
             return false
-
         val targetRoad = unit.civInfo.tech.getBestRoadAvailable()
 
         val citiesThatNeedConnecting = unit.civInfo.cities.asSequence()
@@ -138,7 +136,7 @@ class WorkerAutomation(val unit: MapUnit) {
         return if (selectedTile != null
                 && getPriority(selectedTile, unit.civInfo) > 1
                 && (!workableTiles.contains(currentTile)
-                        || getPriority(selectedTile, unit.civInfo) > getPriority(currentTile, unit.civInfo)))
+                    || getPriority(selectedTile, unit.civInfo) > getPriority(currentTile, unit.civInfo)))
             selectedTile
         else currentTile
     }
@@ -153,15 +151,14 @@ class WorkerAutomation(val unit: MapUnit) {
             return false
 
         if (tile.improvement == null) {
-            if (tile.improvementInProgress != null) return true
+            if (tile.improvementInProgress != null && unit.canBuildImprovement(tile.getTileImprovementInProgress()!!, tile)) return true
             val chosenImprovement = chooseImprovement(tile, civInfo)
-            if (chosenImprovement != null && tile.canBuildImprovement(chosenImprovement, civInfo)) return true
+            if (chosenImprovement != null && tile.canBuildImprovement(chosenImprovement, civInfo) && unit.canBuildImprovement(chosenImprovement, tile)) return true
         } else if (!tile.containsGreatImprovement() && tile.hasViewableResource(civInfo)
                 && tile.getTileResource().improvement != tile.improvement
                 && chooseImprovement(tile, civInfo) // if the chosen improvement is not null and buildable
-                        .let { it != null && tile.canBuildImprovement(it, civInfo) })
+                    .let { it != null && tile.canBuildImprovement(it, civInfo) && unit.canBuildImprovement(it, tile)})
             return true
-
         return false // couldn't find anything to construct here
     }
 
@@ -190,7 +187,7 @@ class WorkerAutomation(val unit: MapUnit) {
         }
 
         // turnsToBuild is what defines them as buildable
-        val tileImprovements = civInfo.gameInfo.ruleSet.tileImprovements.filter { it.value.turnsToBuild!=0 }
+        val tileImprovements = civInfo.gameInfo.ruleSet.tileImprovements.filter { it.value.turnsToBuild != 0 }
         val uniqueImprovement = tileImprovements.values
                 .firstOrNull { it.uniqueTo == civInfo.civName }
 
@@ -205,7 +202,9 @@ class WorkerAutomation(val unit: MapUnit) {
             // While AI sucks in strategical placement of forts, allow a human does it manually
             !civInfo.isPlayerCivilization() && evaluateFortPlacement(tile, civInfo, false) -> Constants.fort
             // I think we can assume that the unique improvement is better
-            uniqueImprovement != null && tile.canBuildImprovement(uniqueImprovement, civInfo) -> uniqueImprovement.name
+            uniqueImprovement != null && tile.canBuildImprovement(uniqueImprovement, civInfo) 
+                && unit.canBuildImprovement(uniqueImprovement, tile) -> 
+                    uniqueImprovement.name
 
             tile.terrainFeatures.contains("Fallout") -> "Remove Fallout"
             tile.terrainFeatures.contains(Constants.marsh) -> "Remove Marsh"
@@ -228,7 +227,7 @@ class WorkerAutomation(val unit: MapUnit) {
                 ?: return false
         val resourceImprovement = civInfo.gameInfo.ruleSet.tileImprovements[resourceImprovementName]
                 ?: return false
-        return tile.terrainFeatures.any { resourceImprovement.resourceTerrainAllow.contains(it) }
+        return tile.terrainFeatures.any { resourceImprovement.isAllowedOnFeature(it) }
     }
 
     private fun isAcceptableTileForFort(tile: TileInfo, civInfo: CivilizationInfo): Boolean {
@@ -289,11 +288,11 @@ class WorkerAutomation(val unit: MapUnit) {
         enemyCivsIsCloseEnough.forEach { enemyCities.addAll(it.cities.map { city -> city.getCenterTile() }) }
 
         // find closest enemy city
-        val closestEnemyCity = enemyCities.minBy { it.aerialDistanceTo(tile) }!!
+        val closestEnemyCity = enemyCities.minByOrNull { it.aerialDistanceTo(tile) }!!
         val distanceToEnemy = tile.aerialDistanceTo(closestEnemyCity)
 
         // find closest our city to defend from this enemy city
-        val closestOurCity = civInfo.cities.minBy { it.getCenterTile().aerialDistanceTo(tile) }!!.getCenterTile()
+        val closestOurCity = civInfo.cities.minByOrNull { it.getCenterTile().aerialDistanceTo(tile) }!!.getCenterTile()
         val distanceToOurCity = tile.aerialDistanceTo(closestOurCity)
 
         val distanceBetweenCities = closestEnemyCity.aerialDistanceTo(closestOurCity)

@@ -1,6 +1,5 @@
 package com.unciv.logic
 
-import com.badlogic.gdx.graphics.Color
 import com.unciv.Constants
 import com.unciv.UncivGame
 import com.unciv.logic.automation.NextTurnAutomation
@@ -9,6 +8,7 @@ import com.unciv.logic.city.PerpetualConstruction
 import com.unciv.logic.civilization.*
 import com.unciv.logic.map.TileInfo
 import com.unciv.logic.map.TileMap
+import com.unciv.models.Religion
 import com.unciv.models.metadata.GameParameters
 import com.unciv.models.ruleset.Difficulty
 import com.unciv.models.ruleset.Ruleset
@@ -33,6 +33,7 @@ class GameInfo {
     lateinit var ruleSet: Ruleset
 
     var civilizations = mutableListOf<CivilizationInfo>()
+    var religions: HashMap<String, Religion> = hashMapOf()
     var difficulty = "Chieftain" // difficulty is game-wide, think what would happen if 2 human players could play on different difficulties?
     var tileMap: TileMap = TileMap()
     var gameParameters = GameParameters()
@@ -41,6 +42,12 @@ class GameInfo {
     var currentPlayer = ""
     var gameId = UUID.randomUUID().toString() // random string
 
+    /**Keep track of a custom location this game was saved to _or_ loaded from
+     *
+     * Note this was used as silent autosave destination, but it was decided (#3898) to
+     * make the custom location feature a one-shot import/export kind of operation.
+     * The tracking is left in place, however [GameSaver.autoSaveSingleThreaded] no longer uses it
+     */
     @Volatile
     var customSaveLocation: String? = null
 
@@ -57,6 +64,7 @@ class GameInfo {
         val toReturn = GameInfo()
         toReturn.tileMap = tileMap.clone()
         toReturn.civilizations.addAll(civilizations.map { it.clone() })
+        toReturn.religions.putAll(religions.map { Pair(it.key, it.value.clone()) })
         toReturn.currentPlayer = currentPlayer
         toReturn.turns = turns
         toReturn.difficulty = difficulty
@@ -277,20 +285,8 @@ class GameInfo {
         for (civInfo in civilizations) civInfo.gameInfo = this
 
         difficultyObject = ruleSet.difficulties[difficulty]!!
-
-        // We have to remove all deprecated buildings from all cities BEFORE we update a single one, or run setTransients on the civs,
-        // because updating leads to getting the building uniques from the civ info,
-        // which in turn leads to us trying to get info on all the building in all the cities...
-        // which can fail if there's an "unregistered" building anywhere
-        for (civInfo in civilizations) {
-            // As of 3.3.7, Facism -> Fascism
-            if (civInfo.policies.adoptedPolicies.contains("Facism")) {
-                civInfo.policies.adoptedPolicies.remove("Facism")
-                civInfo.policies.adoptedPolicies.add("Fascism")
-            }
-
-        }
-
+        
+        for (religion in religions.values) religion.setTransients(this)
 
         // This doesn't HAVE to go here, but why not.
 
@@ -346,6 +342,12 @@ class GameInfo {
         }
 
         for (city in civilizations.asSequence().flatMap { it.cities.asSequence() }) {
+            // Temple was replaced by Amphitheater in 3.15.6. For backwards compatibility, we
+            // replace existing temples with amphitheaters. This replacement should be removed
+            // when temples are reintroduced as faith buildings.
+            changeBuildingNameIfNotInRuleset(city.cityConstructions, "Temple", "Amphitheater")
+
+
             for (building in city.cityConstructions.builtBuildings.toHashSet())
                 if (!ruleSet.buildings.containsKey(building))
                     city.cityConstructions.builtBuildings.remove(building)
@@ -369,20 +371,53 @@ class GameInfo {
                 if (!ruleSet.technologies.containsKey(tech))
                     civinfo.tech.techsResearched.remove(tech)
             for (policy in civinfo.policies.adoptedPolicies.toList())
-                if (!ruleSet.policies.containsKey(policy))
+                // So these two policies are deprecated since 3.14.17
+                // However, we still need to convert save files that have those to valid save files
+                // The easiest way to do this, is just to allow them here, and filter them out in
+                // the policyManager class.
+                // Yes, this is ugly, but it should be temporary, and it works.
+                if (!ruleSet.policies.containsKey(policy) && !(policy == "Entrepreneurship" || policy == "Patronage"))
                     civinfo.policies.adoptedPolicies.remove(policy)
         }
     }
 
-    private fun changeBuildingName(cityConstructions: CityConstructions, oldBuildingName: String, newBuildingName: String) {
+    /**
+     * Replaces all occurrences of [oldBuildingName] in [cityConstructions] with [newBuildingName]
+     * if the former is not contained in the ruleset.
+     * This function can be used for backwards compatibility with older save files when a building
+     * name is changed.
+     */
+    private fun changeBuildingNameIfNotInRuleset(cityConstructions: CityConstructions, oldBuildingName: String, newBuildingName: String) {
+        if (ruleSet.buildings.containsKey(oldBuildingName))
+            return
+        // Replace in built buildings
         if (cityConstructions.builtBuildings.contains(oldBuildingName)) {
             cityConstructions.builtBuildings.remove(oldBuildingName)
             cityConstructions.builtBuildings.add(newBuildingName)
         }
-        cityConstructions.constructionQueue.replaceAll { if (it == oldBuildingName) newBuildingName else it }
+        // Replace in construction queue
+        if (!cityConstructions.builtBuildings.contains(newBuildingName) && !cityConstructions.constructionQueue.contains(newBuildingName))
+            cityConstructions.constructionQueue = cityConstructions.constructionQueue.map{ if (it == oldBuildingName) newBuildingName else it }.toMutableList()
+        else
+            cityConstructions.constructionQueue.remove(oldBuildingName)
+        // Replace in in-progress constructions
         if (cityConstructions.inProgressConstructions.containsKey(oldBuildingName)) {
-            cityConstructions.inProgressConstructions[newBuildingName] = cityConstructions.inProgressConstructions[oldBuildingName]!!
+            if (!cityConstructions.builtBuildings.contains(newBuildingName) && !cityConstructions.inProgressConstructions.containsKey(newBuildingName))
+                cityConstructions.inProgressConstructions[newBuildingName] = cityConstructions.inProgressConstructions[oldBuildingName]!!
             cityConstructions.inProgressConstructions.remove(oldBuildingName)
         }
     }
+    
+    fun hasReligionEnabled() = gameParameters.religionEnabled || ruleSet.hasReligion() // Temporary function to check whether religion should be used for this game
+}
+
+// reduced variant only for load preview
+class GameInfoPreview {
+    var civilizations = mutableListOf<CivilizationInfoPreview>()
+    var difficulty = "Chieftain"
+    var gameParameters = GameParameters()
+    var turns = 0
+    var gameId = ""
+    var currentPlayer = ""
+    fun getCivilization(civName: String) = civilizations.first { it.civName == civName }
 }

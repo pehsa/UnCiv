@@ -49,7 +49,7 @@ object BattleHelper {
         // Silly floats, basically
 
         val unitMustBeSetUp = unit.hasUnique("Must set up to ranged attack")
-        val tilesToAttackFrom = if (unit.type.isAirUnit()) sequenceOf(unit.currentTile)
+        val tilesToAttackFrom = if (unit.baseUnit.movesLikeAirUnits()) sequenceOf(unit.currentTile)
         else
             unitDistanceToTiles.asSequence()
                     .filter {
@@ -63,7 +63,7 @@ object BattleHelper {
 
         for (reachableTile in tilesToAttackFrom) {  // tiles we'll still have energy after we reach there
             val tilesInAttackRange =
-                    if (unit.hasUnique("Ranged attacks may be performed over obstacles") || unit.type.isAirUnit())
+                    if (unit.hasUnique("Ranged attacks may be performed over obstacles") || unit.baseUnit.movesLikeAirUnits())
                         reachableTile.getTilesInDistance(rangeOfAttack)
                     else reachableTile.getViewableTilesList(rangeOfAttack)
                             .asSequence()
@@ -80,8 +80,11 @@ object BattleHelper {
                 if (tile.isWater) return false // can't attack water units while embarked, only land
                 if (combatant.isRanged()) return false
             }
-            if (combatant.unit.hasUnique("Can only attack water")) {
-                if (tile.isLand) return false
+            
+            // "Can only attack water" unique deprecated since 3.15.7
+                if (combatant.unit.hasUnique("Can only attack water")) {
+                    if (tile.isLand) return false
+            //
 
                 // trying to attack lake-to-coast or vice versa
                 if ((tile.baseTerrain == Constants.lakes) != (combatant.getTile().baseTerrain == Constants.lakes))
@@ -92,6 +95,17 @@ object BattleHelper {
         val tileCombatant = Battle.getMapCombatantOfTile(tile) ?: return false
         if (tileCombatant.getCivInfo() == combatant.getCivInfo()) return false
         if (!combatant.getCivInfo().isAtWarWith(tileCombatant.getCivInfo())) return false
+
+        if (combatant is MapUnitCombatant && 
+            combatant.unit.hasUnique("Can only attack [] units") &&
+            combatant.unit.getMatchingUniques("Can only attack [] units").none { tileCombatant.matchesCategory(it.params[0]) }
+        )
+            return false
+        if (combatant is MapUnitCombatant &&
+            combatant.unit.hasUnique("Can only attack [] tiles") &&
+            combatant.unit.getMatchingUniques("Can only attack [] tiles").none { tile.matchesFilter(it.params[0]) }
+        )
+            return false
 
         //only submarine and destroyer can attack submarine
         //garrisoned submarine can be attacked by anyone, or the city will be in invincible
@@ -136,14 +150,17 @@ object BattleHelper {
 
         var enemyTileToAttack: AttackableTile? = null
         val capturableCity = cityTilesToAttack.firstOrNull { it.tileToAttack.getCity()!!.health == 1 }
-        val cityWithHealthLeft = cityTilesToAttack.filter { it.tileToAttack.getCity()!!.health != 1 } // don't want ranged units to attack defeated cities
-                .minBy { it.tileToAttack.getCity()!!.health }
+        val cityWithHealthLeft =
+            cityTilesToAttack.filter { it.tileToAttack.getCity()!!.health != 1 } // don't want ranged units to attack defeated cities
+                .minByOrNull { it.tileToAttack.getCity()!!.health }
 
         if (unit.type.isMelee() && capturableCity != null)
             enemyTileToAttack = capturableCity // enter it quickly, top priority!
 
         else if (nonCityTilesToAttack.isNotEmpty()) // second priority, units
-            enemyTileToAttack = nonCityTilesToAttack.minBy { Battle.getMapCombatantOfTile(it.tileToAttack)!!.getHealth() }
+            enemyTileToAttack = nonCityTilesToAttack.minByOrNull {
+                Battle.getMapCombatantOfTile(it.tileToAttack)!!.getHealth()
+            }
         else if (cityWithHealthLeft != null) enemyTileToAttack = cityWithHealthLeft // third priority, city
 
         return enemyTileToAttack

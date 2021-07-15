@@ -3,8 +3,6 @@ package com.unciv.models.ruleset
 import com.unciv.Constants
 import com.unciv.models.stats.INamed
 import com.unciv.models.translations.tr
-import java.util.*
-import kotlin.collections.ArrayList
 
 class Difficulty: INamed {
     override lateinit var name: String
@@ -16,7 +14,8 @@ class Difficulty: INamed {
     var policyCostModifier:Float = 1f
     var unhappinessModifier:Float = 1f
     var barbarianBonus:Float = 0f
-    var startingUnits = ArrayList<String>()
+    var startingUnits = ArrayList<String>() // Deprecated since 3.15.8
+    var playerBonusStartingUnits = ArrayList<String>()
 
     var aiCityGrowthModifier:Float = 1f
     var aiUnitCostModifier:Float = 1f
@@ -25,22 +24,14 @@ class Difficulty: INamed {
     var aiBuildingMaintenanceModifier:Float = 1f
     var aiUnitMaintenanceModifier = 1f
     var aiFreeTechs = ArrayList<String>()
-    var aiMajorCivStartingUnits = ArrayList<String>()
-    var aiCityStateStartingUnits = ArrayList<String>()
+    var aiMajorCivStartingUnits = ArrayList<String>() // Deprecated since 3.15.8
+    var aiMajorCivBonusStartingUnits = ArrayList<String>()
+    var aiCityStateStartingUnits = ArrayList<String>() // Deprecated since 3.15.8
+    var aiCityStateBonusStartingUnits = ArrayList<String>()
     var aiUnhappinessModifier = 1f
     var turnBarbariansCanEnterPlayerTiles = 0
     var clearBarbarianCampReward = 25
-
-    init {
-        // For compatibility with old mods that use deprecated var aiFreeUnits and do not have startingUnits, aiCityStateStartingUnits, aiMajorCivStartingUnits
-        if (startingUnits.isEmpty()) {
-            startingUnits.add(Constants.settler)
-            startingUnits.add("Warrior")
-            aiCityStateStartingUnits.addAll(startingUnits)
-            aiMajorCivStartingUnits.addAll(startingUnits)
-        }
-    }
-
+    
     fun getDescription(): String {
         val lines = ArrayList<String>()
         lines += "Player settings"

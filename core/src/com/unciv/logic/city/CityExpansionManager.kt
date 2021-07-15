@@ -1,6 +1,8 @@
 package com.unciv.logic.city
 
+import com.badlogic.gdx.math.Vector2
 import com.unciv.logic.automation.Automation
+import com.unciv.logic.civilization.LocationAction
 import com.unciv.logic.civilization.NotificationIcon
 import com.unciv.logic.map.TileInfo
 import com.unciv.ui.utils.withItem
@@ -37,8 +39,13 @@ class CityExpansionManager {
             if (cityInfo.matchesFilter(unique.params[1]))
                 cultureToNextTile *= (100 - unique.params[0].toFloat()) / 100
         }
-
-        if (cityInfo.civInfo.hasUnique("Increased rate of border expansion")) cultureToNextTile *= 0.75
+        
+        for (unique in cityInfo.getMatchingUniques("[]% cost of natural border growth")) 
+            cultureToNextTile *= 1 + unique.params[0].toFloat() / 100f
+        
+        // Unique deprecated since 3.15.10 (seems unused, and should be replaced by the unique above)
+            if (cityInfo.civInfo.hasUnique("Increased rate of border expansion")) cultureToNextTile *= 0.75
+        //
 
         return cultureToNextTile.roundToInt()
     }
@@ -49,7 +56,7 @@ class CityExpansionManager {
         class NotEnoughGoldToBuyTileException : Exception()
         if (cityInfo.civInfo.gold < goldCost && !cityInfo.civInfo.gameInfo.gameParameters.godMode)
             throw NotEnoughGoldToBuyTileException()
-        cityInfo.civInfo.gold -= goldCost
+        cityInfo.civInfo.addGold(-goldCost)
         takeOwnership(tileInfo)
     }
 
@@ -65,19 +72,18 @@ class CityExpansionManager {
         return cost.roundToInt()
     }
 
-
     fun chooseNewTileToOwn(): TileInfo? {
-        for (i in 2..5) {
-            val tiles = cityInfo.getCenterTile().getTilesInDistance(i)
-                    .filter {
-                        it.getOwner() == null
-                                && it.neighbors.any { tile -> tile.getCity() == cityInfo }
-                    }
-            val chosenTile = tiles.maxBy { Automation.rankTile(it, cityInfo.civInfo) }
-            if (chosenTile != null)
-                return chosenTile
+        val choosableTiles = cityInfo.getCenterTile().getTilesInDistance(5)
+            .filter { it.getOwner() == null }
+        
+        // Technically, in the original a random tile with the lowest score was selected
+        // However, doing this requires either caching it, which is way more work,
+        // or selecting all possible tiles and only choosing one when the border expands.
+        // But since the order in which tiles are selected in distance is kinda random anyways,
+        // this is fine.
+        return choosableTiles.minByOrNull {
+            Automation.rankTileForExpansion(it, cityInfo)
         }
-        return null
     }
 
     //region state-changing functions
@@ -95,16 +101,21 @@ class CityExpansionManager {
             takeOwnership(tile)
     }
 
-    private fun addNewTileWithCulture(): Boolean {
+    private fun addNewTileWithCulture(): Vector2? {
         val chosenTile = chooseNewTileToOwn()
         if (chosenTile != null) {
             cultureStored -= getCultureToNextTile()
             takeOwnership(chosenTile)
-            return true
+            return chosenTile.position
         }
-        return false
+        return null
     }
 
+    /**
+     * Removes one tile from this city's owned tiles, unconditionally, and updates dependent
+     * things like worked tiles, locked tiles, and stats.
+     * @param tileInfo The tile to relinquish
+     */
     fun relinquishOwnership(tileInfo: TileInfo) {
         cityInfo.tiles = cityInfo.tiles.withoutItem(tileInfo.position)
         for (city in cityInfo.civInfo.cities) {
@@ -122,6 +133,14 @@ class CityExpansionManager {
         cityInfo.cityStats.update()
     }
 
+    /**
+     * Takes one tile into possession of this city, either unowned or owned by any other city.
+     *
+     * Also manages consequences like auto population reassign, stats, and displacing units
+     * that are no longer allowed on that tile.
+     *
+     * @param tileInfo The tile to take over
+     */
     fun takeOwnership(tileInfo: TileInfo) {
         if (tileInfo.isCityCenter()) throw Exception("What?!")
         if (tileInfo.getCity() != null)
@@ -133,7 +152,7 @@ class CityExpansionManager {
         cityInfo.civInfo.updateDetailedCivResources()
         cityInfo.cityStats.update()
 
-        for (unit in tileInfo.getUnits().toList()) // tolisted because we're modifying
+        for (unit in tileInfo.getUnits().toList()) // toListed because we're modifying
             if (!unit.civInfo.canEnterTiles(cityInfo.civInfo))
                 unit.movement.teleportToClosestMoveableTile()
 
@@ -142,8 +161,13 @@ class CityExpansionManager {
 
     fun nextTurn(culture: Float) {
         cultureStored += culture.toInt()
-        if (cultureStored >= getCultureToNextTile() && addNewTileWithCulture())
-            cityInfo.civInfo.addNotification("[" + cityInfo.name + "] has expanded its borders!", cityInfo.location, NotificationIcon.Culture)
+        if (cultureStored >= getCultureToNextTile()) {
+            val location = addNewTileWithCulture()
+            if (location != null) {
+                val locations = LocationAction(listOf(location, cityInfo.location))
+                cityInfo.civInfo.addNotification("[" + cityInfo.name + "] has expanded its borders!", locations, NotificationIcon.Culture)
+            }
+        }
     }
 
     fun setTransients() {
